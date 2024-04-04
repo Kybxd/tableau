@@ -8,13 +8,11 @@ import (
 	"sync"
 
 	"github.com/iancoleman/strcase"
-	"github.com/tableauio/tableau/internal/confgen/mexporter"
 	"github.com/tableauio/tableau/internal/confgen/prop"
 	"github.com/tableauio/tableau/internal/importer"
 	"github.com/tableauio/tableau/internal/importer/book"
 	"github.com/tableauio/tableau/internal/types"
 	"github.com/tableauio/tableau/internal/xproto"
-	"github.com/tableauio/tableau/log"
 	"github.com/tableauio/tableau/options"
 	"github.com/tableauio/tableau/proto/tableaupb"
 	"github.com/tableauio/tableau/xerrors"
@@ -56,11 +54,7 @@ func (x *sheetExporter) ScatterAndExport(info *SheetInfo, impInfos ...importer.I
 			// exported conf name pattern is : <BookName>_<SheetName>
 			sheetName := getRealSheetName(info, impInfo)
 			name := fmt.Sprintf("%s_%s", impInfo.BookName(), sheetName)
-			exporter := mexporter.New(name, protomsg, x.OutputDir, x.OutputOpt)
-			if err := exporter.Export(); err != nil {
-				return err
-			}
-			return nil
+			return storeMessage(protomsg, name, x.OutputDir, x.OutputOpt)
 		})
 	}
 	if err := eg.Wait(); err != nil {
@@ -75,11 +69,7 @@ func (x *sheetExporter) MergeAndExport(info *SheetInfo, impInfos ...importer.Imp
 	if err != nil {
 		return err
 	}
-	exporter := mexporter.New(string(info.MD.Name()), protomsg, x.OutputDir, x.OutputOpt)
-	if err := exporter.Export(); err != nil {
-		return err
-	}
-	return nil
+	return storeMessage(protomsg, string(info.MD.Name()), x.OutputDir, x.OutputOpt)
 }
 
 type oneMsg struct {
@@ -341,13 +331,8 @@ func (sp *sheetParser) Parse(protomsg proto.Message, sheet *book.Sheet) error {
 // parseFieldOptions is aimed to parse the options of all the fields of a protobuf message.
 func (sp *sheetParser) parseFieldOptions(msg protoreflect.Message, rc *book.RowCells, prefix string) (present bool, err error) {
 	md := msg.Descriptor()
-	pkg := md.ParentFile().Package()
 	for i := 0; i < md.Fields().Len(); i++ {
 		fd := md.Fields().Get(i)
-		if string(pkg) != sp.ProtoPackage && pkg != "google.protobuf" {
-			log.Debugf("no need to process package: %v", pkg)
-			return false, nil
-		}
 		err := func() error {
 			field := parseFieldDescriptor(fd, sp.opts.Sep, sp.opts.Subsep)
 			defer field.release()

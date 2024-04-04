@@ -12,7 +12,9 @@ import (
 	"github.com/tableauio/tableau/internal/types"
 	"github.com/tableauio/tableau/internal/xproto"
 	"github.com/tableauio/tableau/log"
+	"github.com/tableauio/tableau/options"
 	"github.com/tableauio/tableau/proto/tableaupb"
+	"github.com/tableauio/tableau/store"
 	"github.com/tableauio/tableau/xerrors"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
@@ -136,8 +138,7 @@ func parseBookSpecifier(bookSpecifier string) (bookName string, sheetName string
 }
 
 type bookIndexInfo struct {
-	primaryBookName string
-	fd              protoreflect.FileDescriptor
+	books map[string]protoreflect.FileDescriptor // primary book name -> fd
 }
 
 // buildWorkbookIndex builds the secondary workbook name (including self) -> primary workbook info indexes.
@@ -152,7 +153,12 @@ func buildWorkbookIndex(protoPackage protoreflect.FullName, inputDir string, sub
 			}
 			// add self: rewrite subdir
 			rewrittenWorkbookName := fs.RewriteSubdir(workbook.Name, subdirRewrites)
-			bookIndexes[rewrittenWorkbookName] = &bookIndexInfo{primaryBookName: workbook.Name, fd: fd}
+			if bookIndexes[rewrittenWorkbookName] == nil {
+				bookIndexes[rewrittenWorkbookName] = &bookIndexInfo{
+					books: make(map[string]protoreflect.FileDescriptor),
+				}
+			}
+			bookIndexes[rewrittenWorkbookName].books[workbook.Name] = fd
 			// merger or scatter (only one can be set at once)
 			msgs := fd.Messages()
 			for i := 0; i < msgs.Len(); i++ {
@@ -173,7 +179,12 @@ func buildWorkbookIndex(protoPackage protoreflect.FullName, inputDir string, sub
 						return false
 					}
 					for relBookPath := range relBookPaths {
-						bookIndexes[relBookPath] = &bookIndexInfo{primaryBookName: workbook.Name, fd: fd}
+						if bookIndexes[relBookPath] == nil {
+							bookIndexes[relBookPath] = &bookIndexInfo{
+								books: make(map[string]protoreflect.FileDescriptor),
+							}
+						}
+						bookIndexes[relBookPath].books[workbook.Name] = fd
 					}
 				}
 			}
@@ -184,7 +195,9 @@ func buildWorkbookIndex(protoPackage protoreflect.FullName, inputDir string, sub
 		return nil, err
 	}
 	for k, v := range bookIndexes {
-		log.Debugf("primary book index: %s -> %s", k, v.primaryBookName)
+		for primaryBookName := range v.books {
+			log.Debugf("primary book index: %s -> %s", k, primaryBookName)
+		}
 	}
 	return bookIndexes, nil
 }
@@ -221,4 +234,26 @@ func loadProtoRegistryFiles(protoPackage string, protoPaths []string, protoFiles
 		return protoregistry.GlobalFiles, nil
 	}
 	return xproto.NewFiles(protoPaths, protoFiles, excludeProtoFiles...)
+}
+
+// storeMessage stores a message to one or multiple file formats.
+func storeMessage(msg proto.Message, name string, outputDir string, opt *options.ConfOutputOption) error {
+	outputDir = filepath.Join(outputDir, opt.Subdir)
+	formats := format.OutputFormats
+	if len(opt.Formats) != 0 {
+		formats = opt.Formats
+	}
+	for _, fmt := range formats {
+		err := store.Store(msg, outputDir, fmt,
+			store.Name(name),
+			store.Pretty(opt.Pretty),
+			store.EmitUnpopulated(opt.EmitUnpopulated),
+			store.UseProtoNames(opt.UseProtoNames),
+			store.UseEnumNumbers(opt.UseEnumNumbers),
+		)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
