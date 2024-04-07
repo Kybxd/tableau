@@ -400,9 +400,9 @@ func (sp *sheetParser) parseMapField(field *Field, msg protoreflect.Message, rc 
 			var newMapValue protoreflect.Value
 			if reflectMap.Has(newMapKey) {
 				// check key uniqueness
-				if err := prop.CheckKeyUnique(field.opts.Prop, cell.Data, true); err != nil {
+				if sp.mapKeyMustUnique(field, reflectMap, field.opts.Prop) {
 					kvs := append(rc.CellDebugKV(keyColName), xerrors.KeyPBFieldType, "vertical map")
-					return false, xerrors.WrapKV(err, kvs...)
+					return false, xerrors.WrapKV(xerrors.E2005(cell.Data), kvs...)
 				}
 				newMapValue = reflectMap.Mutable(newMapKey)
 			} else {
@@ -438,11 +438,9 @@ func (sp *sheetParser) parseMapField(field *Field, msg protoreflect.Message, rc 
 
 			newMapKey := fieldValue.MapKey()
 			if reflectMap.Has(newMapKey) {
-				// check key uniqueness
-				if err := prop.CheckKeyUnique(field.opts.Prop, cell.Data, true); err != nil {
-					kvs := append(rc.CellDebugKV(keyColName), xerrors.KeyPBFieldType, "vertical scalar map")
-					return false, xerrors.WrapKV(err, kvs...)
-				}
+				// scalar map must be unique
+				kvs := append(rc.CellDebugKV(keyColName), xerrors.KeyPBFieldType, "vertical scalar map")
+				return false, xerrors.WrapKV(xerrors.E2005(cell.Data), kvs...)
 			}
 			// value cell
 			valueColName := prefix + field.opts.Name + value
@@ -503,9 +501,9 @@ func (sp *sheetParser) parseMapField(field *Field, msg protoreflect.Message, rc 
 				var newMapValue protoreflect.Value
 				if reflectMap.Has(newMapKey) {
 					// check key uniqueness
-					if err := prop.CheckKeyUnique(field.opts.Prop, cell.Data, true); err != nil {
+					if sp.mapKeyMustUnique(field, reflectMap, field.opts.Prop) {
 						kvs := append(rc.CellDebugKV(keyColName), xerrors.KeyPBFieldType, "horizontal map")
-						return false, xerrors.WrapKV(err, kvs...)
+						return false, xerrors.WrapKV(xerrors.E2005(cell.Data), kvs...)
 					}
 					newMapValue = reflectMap.Mutable(newMapKey)
 				} else {
@@ -724,6 +722,54 @@ func (sp *sheetParser) parseMapKey(field *Field, reflectMap protoreflect.Map, ce
 		return mapKey, false, xerrors.E2003(cellData, field.opts.Prop.GetSequence())
 	}
 	return mapKey, present, nil
+}
+
+func (sp *sheetParser) mapKeyMustUnique(field *Field, reflectMap protoreflect.Map, prop *tableaupb.FieldProp) bool {
+	layout := field.opts.Layout
+	if field.opts.Layout == tableaupb.Layout_LAYOUT_DEFAULT {
+		// Map default layout is vertical
+		layout = tableaupb.Layout_LAYOUT_VERTICAL
+	}
+	if field.opts.Layout == tableaupb.Layout_LAYOUT_INCELL {
+		// incell map key must be unique
+		return true
+	}
+	md := reflectMap.NewValue().Message().Descriptor()
+	for i := 0; i < md.Fields().Len(); i++ {
+		fd := md.Fields().Get(i)
+		if fd.IsMap() {
+			childField := parseFieldDescriptor(fd, sp.opts.Sep, sp.opts.Subsep)
+			defer childField.release()
+			childLayout := childField.opts.Layout
+			if childLayout == tableaupb.Layout_LAYOUT_DEFAULT {
+				// Map default layout is vertical
+				childLayout = tableaupb.Layout_LAYOUT_VERTICAL
+			}
+			if childLayout == tableaupb.Layout_LAYOUT_INCELL {
+				// ignore incell map
+				continue
+			}
+			if childLayout == layout {
+				return false
+			}
+		} else if fd.IsList() {
+			childField := parseFieldDescriptor(fd, sp.opts.Sep, sp.opts.Subsep)
+			defer childField.release()
+			childLayout := childField.opts.Layout
+			if childLayout == tableaupb.Layout_LAYOUT_DEFAULT {
+				// List default layout is horizontal
+				childLayout = tableaupb.Layout_LAYOUT_HORIZONTAL
+			}
+			if childLayout == tableaupb.Layout_LAYOUT_INCELL {
+				// ignore incell list
+				continue
+			}
+			if childLayout == layout {
+				return false
+			}
+		}
+	}
+	return prop != nil && prop.Unique
 }
 
 func (sp *sheetParser) parseListField(field *Field, msg protoreflect.Message, rc *book.RowCells, prefix string) (present bool, err error) {

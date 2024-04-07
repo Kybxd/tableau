@@ -11,14 +11,6 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
-func CheckKeyUnique(prop *tableaupb.FieldProp, key string, existed bool) error {
-	unique := prop != nil && prop.Unique
-	if unique && existed {
-		return xerrors.E2005(key)
-	}
-	return nil
-}
-
 func CheckInRange(prop *tableaupb.FieldProp, fd protoreflect.FieldDescriptor, value protoreflect.Value, present bool) error {
 	if prop == nil || strings.TrimSpace(prop.Range) == "" {
 		return nil
