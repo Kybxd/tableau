@@ -82,13 +82,13 @@ var keys = []string{
 
 type Desc struct {
 	err    error
-	fields map[string]interface{}
+	fields map[string]any
 }
 
 func NewDesc(err error) *Desc {
 	desc := &Desc{
 		err:    err,
-		fields: map[string]interface{}{},
+		fields: map[string]any{},
 	}
 
 	splits := strings.Split(err.Error(), "|")
@@ -107,7 +107,7 @@ func (d *Desc) setField(key, val string) {
 }
 
 func (d *Desc) ErrCode() string {
-	val := d.fields["ErrCode"]
+	val := d.GetValue(keyErrCode)
 	if val != nil {
 		ecode, ok := val.(string)
 		if ok {
@@ -119,15 +119,20 @@ func (d *Desc) ErrCode() string {
 
 // String render description in specified language.
 func (d *Desc) String() string {
-	if d.fields[keyReason] == nil || d.fields[KeyModule] == nil {
+	if d.fields[keyReason] == nil {
 		return d.err.Error()
 	}
+	if d.fields[KeyModule] == nil && d.fields[keyErrCode] != nil {
+		d.fields[KeyModule] = ModuleDefault
+	}
 	debugging := fmt.Sprintf("Debugging: \n%s\n", d.DebugString())
-	module := d.fields[KeyModule].(string)
+	var module string
+	val := d.GetValue(KeyModule)
+	if val != nil {
+		module = val.(string)
+	}
 	switch module {
-	case ModuleProto:
-		return debugging + renderSummary(module, d.fields)
-	case ModuleConf:
+	case ModuleDefault, ModuleProto, ModuleConf:
 		return debugging + renderSummary(module, d.fields)
 	default:
 		return d.err.Error()
@@ -143,4 +148,8 @@ func (d *Desc) DebugString() string {
 		}
 	}
 	return str
+}
+
+func (d *Desc) GetValue(key string) any {
+	return d.fields[key]
 }

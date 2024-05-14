@@ -12,6 +12,7 @@ import (
 	"github.com/tableauio/tableau/internal/fs"
 	"github.com/tableauio/tableau/internal/importer"
 	"github.com/tableauio/tableau/log"
+	"github.com/tableauio/tableau/xerrors"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/encoding/prototext"
 	"google.golang.org/protobuf/proto"
@@ -23,46 +24,39 @@ func Load(msg proto.Message, dir string, fmt format.Format, options ...Option) e
 	if format.IsInputFormat(fmt) {
 		return loadOrigin(msg, dir, options...)
 	}
-
-	var path string
 	name := string(msg.ProtoReflect().Descriptor().Name())
+	path := filepath.Join(dir, name+format.Format2Ext(fmt))
 	opts := ParseOptions(options...)
 	if opts.Paths != nil {
 		if p, ok := opts.Paths[name]; ok {
 			// path specified explicitly, then use it directly
 			path = p
-			fmt = format.Ext2Format(filepath.Ext(path))
-		}
-	}
-	if path == "" {
-		switch fmt {
-		case format.JSON:
-			path = filepath.Join(dir, name+format.JSONExt)
-		case format.Text:
-			path = filepath.Join(dir, name+format.TextExt)
-		case format.Bin:
-			path = filepath.Join(dir, name+format.BinExt)
-		default:
-			return errors.Errorf("unknown format: %v", fmt)
+			fmt = format.GetFormat(path)
 		}
 	}
 	content, err := os.ReadFile(path)
 	if err != nil {
 		return errors.Wrapf(err, "failed to read file: %v", path)
 	}
+
+	var unmarshalErr error
 	switch fmt {
 	case format.JSON:
-		unmarshOpts := protojson.UnmarshalOptions{
+		unmarshalOpts := protojson.UnmarshalOptions{
 			DiscardUnknown: opts.IgnoreUnknownFields,
 		}
-		return unmarshOpts.Unmarshal(content, msg)
+		unmarshalErr = unmarshalOpts.Unmarshal(content, msg)
 	case format.Text:
-		return prototext.Unmarshal(content, msg)
+		unmarshalErr = prototext.Unmarshal(content, msg)
 	case format.Bin:
-		return proto.Unmarshal(content, msg)
+		unmarshalErr = proto.Unmarshal(content, msg)
 	default:
 		return errors.Errorf("unknown format: %v", fmt)
 	}
+	if unmarshalErr != nil {
+		return xerrors.E0002(path, name, unmarshalErr.Error())
+	}
+	return nil
 }
 
 // loadOrigin loads the origin file(excel/csv/xml) from the given directory.
@@ -108,6 +102,7 @@ func loadOrigin(msg proto.Message, dir string, options ...Option) error {
 			InputDir:       dir,
 			SubdirRewrites: opts.SubdirRewrites,
 			PRFiles:        protoregistry.GlobalFiles,
+			BookFormat:     self.Format(),
 		},
 	}
 	protomsg, err := confgen.ParseMessage(sheetInfo, impInfos...)
